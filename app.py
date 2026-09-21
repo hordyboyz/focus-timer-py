@@ -26,6 +26,7 @@ def server_time():
     return jsonify(
         iso=now.isoformat(timespec="seconds"),
         weekday=WEEKDAYS[now.weekday()],
+        version="v2",
     )
 
 
