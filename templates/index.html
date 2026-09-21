@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>番茄钟 · Flask 版</title>
+<style>
+  :root {
+    --bg: #0b0e17;
+    --card: rgba(255, 255, 255, .05);
+    --border: rgba(255, 255, 255, .1);
+    --text: #e8ecf4;
+    --muted: #8b93a7;
+    --focus-a: #6ea8fe;
+    --focus-b: #b18cfe;
+    --rest-a: #34d399;
+    --rest-b: #22d3ee;
+    --green: #4ade80;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", -apple-system, sans-serif;
+    background: var(--bg); color: var(--text);
+    min-height: 100vh; overflow-x: hidden;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .glow { position: fixed; border-radius: 50%; filter: blur(130px); opacity: .3; pointer-events: none; transition: background .8s; }
+  .glow.a { width: 460px; height: 460px; background: #2950ff; top: -160px; left: -120px; }
+  .glow.b { width: 400px; height: 400px; background: #8b2fd6; bottom: -140px; right: -100px; }
+
+  .app { position: relative; z-index: 1; text-align: center; padding: 32px 24px; width: 100%; max-width: 460px; }
+
+  h1 { font-size: 20px; font-weight: 700; letter-spacing: 4px; color: var(--muted); margin-bottom: 26px; }
+
+  /* 模式切换 */
+  .modes {
+    display: inline-flex; background: var(--card); border: 1px solid var(--border);
+    border-radius: 999px; padding: 4px; margin-bottom: 30px;
+  }
+  .modes button {
+    border: 0; background: transparent; color: var(--muted);
+    font-size: 14px; padding: 8px 22px; border-radius: 999px; cursor: pointer;
+    transition: all .25s; font-family: inherit;
+  }
+  .modes button.active { color: #fff; font-weight: 600; }
+
+  /* 圆环 */
+  .ring-box { position: relative; width: 280px; height: 280px; margin: 0 auto 26px; }
+  svg { transform: rotate(-90deg); }
+  .ring-bg { stroke: rgba(255,255,255,.08); }
+  .ring-fg { transition: stroke .8s; }
+  .time-box {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
+  .time {
+    font-size: 56px; font-weight: 700; font-variant-numeric: tabular-nums;
+    letter-spacing: 2px; line-height: 1;
+  }
+  .phase { margin-top: 10px; font-size: 13px; color: var(--muted); letter-spacing: 2px; }
+
+  /* 按钮 */
+  .ctrl { display: flex; gap: 14px; justify-content: center; margin-bottom: 26px; }
+  .btn {
+    border: 0; cursor: pointer; font-family: inherit;
+    padding: 13px 34px; border-radius: 12px; font-size: 15px; font-weight: 600;
+    transition: transform .2s, box-shadow .2s, background .3s; color: #fff;
+  }
+  .btn.main { min-width: 128px; }
+  .btn.main.going { background: rgba(255,255,255,.1); border: 1px solid var(--border); }
+  .btn.reset { background: rgba(255,255,255,.06); border: 1px solid var(--border); color: var(--muted); }
+  .btn:hover { transform: translateY(-3px); }
+
+  /* 计数 */
+  .count { color: var(--muted); font-size: 14px; }
+  .count b { color: var(--text); font-size: 18px; }
+
+  /* toast */
+  .toast {
+    position: fixed; top: 28px; left: 50%; transform: translate(-50%, -80px);
+    background: rgba(20, 24, 38, .92); border: 1px solid var(--border);
+    color: var(--text); font-size: 14px; padding: 12px 22px; border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.5); transition: transform .4s cubic-bezier(.2,.9,.3,1.2);
+    z-index: 10;
+  }
+  .toast.show { transform: translate(-50%, 0); }
+
+  /* 服务器时间（Python 后端动态提供） */
+  .server-time {
+    margin: 18px auto 0; padding: 10px 18px; max-width: 360px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    font-size: 13px; color: var(--muted); line-height: 1.8;
+  }
+  .server-time .val {
+    color: var(--green); font-weight: 600; font-variant-numeric: tabular-nums;
+  }
+  .server-time .dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green); margin-right: 6px;
+    animation: pulse 2s infinite; vertical-align: 1px;
+  }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(74,222,128,.5);} 50% { box-shadow: 0 0 0 6px rgba(74,222,128,0);} }
+
+  .tip { margin-top: 16px; color: var(--muted); font-size: 12.5px; line-height: 1.8; }
+</style>
+</head>
+<body>
+<div class="glow a" id="glowA"></div>
+<div class="glow b" id="glowB"></div>
+
+<div class="app">
+  <h1>番茄钟</h1>
+
+  <div class="modes">
+    <button id="modeFocus" class="active">专注 25 分</button>
+    <button id="modeRest">小休 5 分</button>
+  </div>
+
+  <div class="ring-box">
+    <svg width="280" height="280" viewBox="0 0 280 280">
+      <circle class="ring-bg" cx="140" cy="140" r="126" fill="none" stroke-width="10"/>
+      <circle class="ring-fg" id="ring" cx="140" cy="140" r="126" fill="none" stroke-width="10"
+              stroke-linecap="round" stroke-dasharray="791.7" stroke-dashoffset="0"/>
+    </svg>
+    <div class="time-box">
+      <div class="time" id="time">25:00</div>
+      <div class="phase" id="phase">准备开始专注</div>
+    </div>
+  </div>
+
+  <div class="ctrl">
+    <button class="btn main" id="startBtn">开始</button>
+    <button class="btn reset" id="resetBtn">重置</button>
+  </div>
+
+  <div class="count">今日已完成 <b id="doneCount">0</b> 个番茄</div>
+
+  <div class="server-time">
+    <span class="dot"></span>Python 服务器时间：<span class="val" id="serverTime">连接中…</span>
+    <span id="serverWeekday" style="color:var(--muted)"></span>
+  </div>
+
+  <div class="tip">本页由 Flask（Python）服务端渲染提供。<br>上方时间每秒向后端 /api/time 发起请求，由 Python 实时计算返回。</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  var CIRC = 2 * Math.PI * 126;                 // 圆环周长
+  var MODES = {
+    focus: { minutes: 25, label: '专注中', done: '干得漂亮！番茄完成，去休息一下吧', ring: ['#6ea8fe', '#b18cfe'], glow: ['#2950ff', '#8b2fd6'] },
+    rest:  { minutes: 5,  label: '小休中', done: '休息结束，回来继续专注吧',       ring: ['#34d399', '#22d3ee'], glow: ['#0f9d58', '#0e8aa8'] }
+  };
+  var mode = 'focus';
+  var running = false;
+  var total = MODES.focus.minutes * 60 * 1000;  // 总时长（毫秒）
+  var remain = total;                            // 剩余（毫秒）
+  var endAt = 0;                                 // 结束时间戳
+  var timer = null;
+  var done = 0;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var ring = $('ring');
+  ring.setAttribute('stroke-dasharray', CIRC);
+
+  // 恢复今日完成数
+  var today = new Date().toDateString();
+  try {
+    var saved = JSON.parse(localStorage.getItem('pomo') || 'null');
+    if (saved && saved.day === today) done = saved.count || 0;
+  } catch (e) {}
+  $('doneCount').textContent = done;
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+
+  function fmt(ms) {
+    var s = Math.max(0, Math.ceil(ms / 1000));
+    return pad(Math.floor(s / 60)) + ':' + pad(s % 60);
+  }
+
+  function paint() {
+    var m = MODES[mode];
+    $('time').textContent = fmt(remain);
+    ring.setAttribute('stroke-dashoffset', CIRC * (1 - remain / total));
+    ring.setAttribute('stroke', 'url(#grad' + (mode === 'focus' ? 'F' : 'R') + ')');
+    document.title = running ? fmt(remain) + ' · ' + m.label : '番茄钟 · Flask 版';
+  }
+
+  function applyTheme() {
+    var m = MODES[mode];
+    ring.style.stroke = 'transparent';
+    var stops = document.querySelectorAll((mode === 'focus' ? '#gradF' : '#gradR') + ' stop');
+    stops[0].setAttribute('stop-color', m.ring[0]);
+    stops[1].setAttribute('stop-color', m.ring[1]);
+    $('glowA').style.background = m.glow[0];
+    $('glowB').style.background = m.glow[1];
+    $('startBtn').style.background = running ? '' : 'linear-gradient(90deg,' + m.ring[0] + ',' + m.ring[1] + ')';
+    $('startBtn').style.boxShadow = running ? '' : '0 8px 24px ' + m.ring[0] + '44';
+    ring.style.stroke = '';
+    paint();
+  }
+
+  function setButtons() {
+    var m = MODES[mode];
+    $('startBtn').textContent = running ? '暂停' : (remain < total ? '继续' : '开始');
+    $('startBtn').className = 'btn main' + (running ? ' going' : '');
+    $('phase').textContent = running ? m.label : (remain < total ? '已暂停' : '准备开始' + (mode === 'focus' ? '专注' : '休息'));
+    applyTheme();
+  }
+
+  function tick() {
+    remain = endAt - Date.now();
+    if (remain <= 0) {
+      finish();
+      return;
+    }
+    paint();
+  }
+
+  function finish() {
+    running = false;
+    clearInterval(timer);
+    timer = null;
+    if (mode === 'focus') {
+      done++;
+      $('doneCount').textContent = done;
+      try { localStorage.setItem('pomo', JSON.stringify({ day: today, count: done })); } catch (e) {}
+      toast(MODES.focus.done + '（已完成 ' + done + ' 个）');
+      switchMode('rest', true);
+    } else {
+      toast(MODES.rest.done);
+      switchMode('focus', true);
+    }
+  }
+
+  function switchMode(next, silent) {
+    mode = next;
+    total = MODES[next].minutes * 60 * 1000;
+    remain = total;
+    $('modeFocus').className = next === 'focus' ? 'active' : '';
+    $('modeRest').className = next === 'rest' ? 'active' : '';
+    running = false;
+    clearInterval(timer);
+    timer = null;
+    setButtons();
+    if (!silent) toast('已切换：' + MODES[next].label);
+  }
+
+  function toast(msg) {
+    var t = $('toast');
+    t.textContent = msg;
+    t.className = 'toast show';
+    setTimeout(function () { t.className = 'toast'; }, 3200);
+  }
+
+  $('startBtn').onclick = function () {
+    if (running) {                    // 暂停
+      running = false;
+      clearInterval(timer);
+      timer = null;
+    } else {                          // 开始/继续
+      endAt = Date.now() + remain;
+      running = true;
+      timer = setInterval(tick, 250);
+    }
+    setButtons();
+  };
+
+  $('resetBtn').onclick = function () {
+    running = false;
+    clearInterval(timer);
+    timer = null;
+    remain = total;
+    setButtons();
+  };
+
+  $('modeFocus').onclick = function () { if (mode !== 'focus') switchMode('focus'); };
+  $('modeRest').onclick = function () { if (mode !== 'rest') switchMode('rest'); };
+
+  // ===== Python 后端动态部分：每秒请求 /api/time =====
+  function fetchServerTime() {
+    fetch('/api/time')
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        $('serverTime').textContent = d.iso.replace('T', ' ');
+        $('serverWeekday').textContent = ' · ' + d.weekday;
+      })
+      .catch(function () {
+        $('serverTime').textContent = '后端连接失败';
+      });
+  }
+  fetchServerTime();
+  setInterval(fetchServerTime, 1000);
+
+  // 初始主题
+  var stopsF = document.querySelectorAll('#gradF stop');
+  stopsF[0].setAttribute('stop-color', MODES.focus.ring[0]);
+  stopsF[1].setAttribute('stop-color', MODES.focus.ring[1]);
+  var stopsR = document.querySelectorAll('#gradR stop');
+  stopsR[0].setAttribute('stop-color', MODES.rest.ring[0]);
+  stopsR[1].setAttribute('stop-color', MODES.rest.ring[1]);
+  setButtons();
+</script>
+
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <linearGradient id="gradF" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6ea8fe"/>
+      <stop offset="100%" stop-color="#b18cfe"/>
+    </linearGradient>
+    <linearGradient id="gradR" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+</svg>
+</body>
+</html>
